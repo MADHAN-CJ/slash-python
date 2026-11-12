@@ -12,10 +12,34 @@
   <header class="floating-nav">
     <a class="nav-brand" href="https://slash.markets" aria-label="/markets home"><img src="assets/icons/markets-logomark-mono.svg" width="38" height="28" alt=""><span class="markets-wordmark"><span class="markets-slash">/</span>markets</span></a>
     <span class="nav-page">Python workbench</span>
+    <button class="nav-signout" type="button" id="signout" hidden>Sign out</button>
     <!-- <a class="nav-connect" href="https://slash.markets">Connect your AI<img src="assets/icons/arrow-up-right.svg" width="18" height="18" alt="" aria-hidden="true"></a> -->
   </header>
 
-  <main>
+  <section class="login" id="login" hidden aria-labelledby="login-title">
+    <div class="login-card" data-ui>
+      <div class="login-brand"><img src="assets/icons/markets-logomark-mono.svg" width="38" height="28" alt=""><span class="markets-wordmark"><span class="markets-slash">/</span>markets</span><span class="login-tag">Python workbench</span></div>
+      <h1 class="login-title" id="login-title">Sign in to the workbench.</h1>
+      <p class="login-lead">Reads market data through the shared <span class="markets-label"><span class="markets-wordmark"><span class="markets-slash">/</span>markets</span></span> feed. It can never place, modify or cancel an order.</p>
+
+      <form class="login-form" id="login-email-form" novalidate>
+        <label class="login-label" for="login-email">Email</label>
+        <input class="login-input" id="login-email" type="email" placeholder="you@example.com" autocomplete="email" autocapitalize="none" spellcheck="false" required>
+        <button class="button button-primary login-button" type="submit" id="login-send">Send code</button>
+      </form>
+
+      <form class="login-form" id="login-otp-form" hidden novalidate>
+        <label class="login-label" for="login-otp">The 6-digit code sent to <strong id="login-email-echo"></strong></label>
+        <input class="login-input login-otp" id="login-otp" inputmode="numeric" maxlength="6" placeholder="123456" autocomplete="one-time-code">
+        <button class="button button-primary login-button" type="submit" id="login-verify">Sign in</button>
+        <button class="login-link" type="button" id="login-back">Use a different email</button>
+      </form>
+
+      <p class="login-error" id="login-error" role="alert" hidden></p>
+    </div>
+  </section>
+
+  <main id="app" hidden>
     <section class="hero" aria-labelledby="hero-title">
       <h1 class="hero-title" id="hero-title"><span>Run Python</span><span>on the market.</span></h1>
       <!-- <blockquote class="hero-quote"><p>Dalal Street doesn&rsquo;t care what you believe. It only prints what you can measure.</p></blockquote> -->
@@ -27,14 +51,11 @@
 
       <div class="editor-column">
         <div class="mode-row">
-          <label class="mode-label" for="mode">Ask with</label>
-          <span class="mode-select-wrap">
-            <select class="mode-select" id="mode" aria-label="Choose how to ask">
-              <option value="nl">Natural language</option>
-              <option value="py">Python script</option>
-            </select>
-            <svg class="mode-chevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6l6 -6"/></svg>
-          </span>
+          <span id="mode-label">Ask with</span>
+          <div class="mode-options" role="group" aria-labelledby="mode-label" id="mode">
+            <button class="mode-option" type="button" data-mode="nl" aria-pressed="true">Natural language</button>
+            <button class="mode-option" type="button" data-mode="py" aria-pressed="false">Python script</button>
+          </div>
         </div>
 
         <div class="stage">

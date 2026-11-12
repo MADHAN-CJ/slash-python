@@ -9,6 +9,10 @@ Scripts run through the /markets Dhan MCP (`run_python`), so `import slashdhan` 
 
 Theme, fonts, icons and components come from `slash-dashboard/` (see its `BRAND_GUIDELINES.md`). No new fonts, no remote imports.
 
+## Login gate (demo)
+
+The page opens on a sign-in screen (email, then a 6-digit code) that mirrors the account app's flow. It is a demo gate only: the credentials are fixed in `src/app.js` (`test@slash.markets` / `123456`), checked in the browser, and success stores a flag in `localStorage` (`slash-python.session`). The server has no sessions and the API endpoints are not protected by it.
+
 ## Run locally
 
 ```sh

@@ -70,7 +70,8 @@ const highlight = HighlightStyle.define([
 ]);
 
 const $ = (id) => document.getElementById(id);
-const modeSelect = $("mode");
+const modeOptions = [...document.querySelectorAll(".mode-option")];
+let currentMode = "nl";
 const askCard = $("ask-card");
 const askInput = $("ask-input");
 const editorCard = $("editor-card");
@@ -130,7 +131,8 @@ function markManual() { generated = null; }
 
 // ----- mode -----
 function setMode(mode, { silent = false } = {}) {
-  modeSelect.value = mode;
+  currentMode = mode;
+  modeOptions.forEach((b) => b.setAttribute("aria-pressed", b.dataset.mode === mode ? "true" : "false"));
   const nl = mode === "nl";
   askCard.hidden = !nl;
   editorCard.hidden = nl;
@@ -140,7 +142,7 @@ function setMode(mode, { silent = false } = {}) {
   buttonLabel.textContent = nl ? "Write script and generate report" : "Generate report";
   if (!silent) (nl ? askInput : editor).focus();
 }
-modeSelect.addEventListener("change", () => setMode(modeSelect.value));
+modeOptions.forEach((b) => b.addEventListener("click", () => { if (!busy && !b.disabled) setMode(b.dataset.mode); }));
 
 // ----- result card -----
 function setState(state, status) {
@@ -155,9 +157,9 @@ function setBusy(value, label) {
   busy = value;
   generateButton.disabled = value;
   resetButton.disabled = value;
-  modeSelect.disabled = value;
+  $("mode").setAttribute("aria-busy", value ? "true" : "false");
   if (label) buttonLabel.textContent = label;
-  else setMode(modeSelect.value, { silent: true });
+  else setMode(currentMode, { silent: true });
   generateButton.setAttribute("aria-busy", value ? "true" : "false");
 }
 
@@ -312,7 +314,7 @@ async function questionFlow() {
 
 async function generate() {
   if (busy) return;
-  if (modeSelect.value === "nl") await questionFlow();
+  if (currentMode === "nl") await questionFlow();
   else await pythonFlow();
 }
 
@@ -330,10 +332,72 @@ askInput.addEventListener("keydown", (event) => {
 fetch("/api/config").then((r) => r.json()).then((config) => {
   MAX_ATTEMPTS = config.maxAttempts || MAX_ATTEMPTS;
   if (!config.naturalLanguage) {
-    modeSelect.querySelector('option[value="nl"]').disabled = true;
+    modeOptions.find((b) => b.dataset.mode === "nl").disabled = true;
     setMode("py", { silent: true });
   }
 }).catch(() => {});
+
+// ----- login gate (dummy): fixed email + code, nothing sent anywhere, a flag in localStorage -----
+const SESSION_KEY = "slash-python.session";
+const DEMO_EMAIL = "test@slash.markets";
+const DEMO_OTP = "123456";
+const loginView = $("login");
+const appView = $("app");
+const signoutButton = $("signout");
+const emailForm = $("login-email-form");
+const otpForm = $("login-otp-form");
+const emailInput = $("login-email");
+const otpInput = $("login-otp");
+const emailEcho = $("login-email-echo");
+const loginError = $("login-error");
+const sendButton = $("login-send");
+const verifyButton = $("login-verify");
+
+function hasSession() {
+  try { return Boolean(localStorage.getItem(SESSION_KEY)); } catch { return false; }
+}
+function showLoginError(text) { loginError.textContent = text; loginError.hidden = !text; }
+function showApp(signedIn) {
+  loginView.hidden = signedIn;
+  appView.hidden = !signedIn;
+  signoutButton.hidden = !signedIn;
+  document.body.classList.toggle("signed-out", !signedIn);
+  if (!signedIn) { emailForm.hidden = false; otpForm.hidden = true; otpInput.value = ""; showLoginError(""); emailInput.focus(); }
+}
+emailInput.addEventListener("input", () => { sendButton.disabled = !emailInput.value.trim(); });
+otpInput.addEventListener("input", () => { otpInput.value = otpInput.value.replace(/\D/g, "").slice(0, 6); verifyButton.disabled = otpInput.value.length !== 6; });
+sendButton.disabled = true;
+verifyButton.disabled = true;
+emailForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const email = emailInput.value.trim().toLowerCase();
+  if (!email) return;
+  showLoginError("");
+  sendButton.disabled = true; sendButton.textContent = "Sending…";
+  await new Promise((r) => setTimeout(r, 450));
+  sendButton.textContent = "Send code"; sendButton.disabled = false;
+  if (email !== DEMO_EMAIL) { showLoginError("No account for that email."); return; }
+  emailEcho.textContent = email;
+  emailForm.hidden = true; otpForm.hidden = false; otpInput.focus();
+});
+otpForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  if (otpInput.value.length !== 6) return;
+  showLoginError("");
+  verifyButton.disabled = true; verifyButton.textContent = "Checking…";
+  await new Promise((r) => setTimeout(r, 450));
+  verifyButton.textContent = "Sign in"; verifyButton.disabled = false;
+  if (otpInput.value !== DEMO_OTP) { showLoginError("That code is not right."); return; }
+  try { localStorage.setItem(SESSION_KEY, JSON.stringify({ email: DEMO_EMAIL, at: new Date().toISOString() })); } catch { /* storage unavailable: session lasts this page view */ }
+  showApp(true);
+  askInput.focus();
+});
+$("login-back").addEventListener("click", () => { otpForm.hidden = true; emailForm.hidden = false; otpInput.value = ""; showLoginError(""); emailInput.focus(); });
+signoutButton.addEventListener("click", () => {
+  try { localStorage.removeItem(SESSION_KEY); } catch { /* ignore */ }
+  showApp(false);
+});
+showApp(hasSession());
 
 setMode("nl", { silent: true });
 
