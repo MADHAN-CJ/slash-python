@@ -221,7 +221,7 @@ async function generate() {
   setState("writing", "Writing the report");
   resultBody.innerHTML = `<div class="run-note">Script finished in ${(run.durationMs / 1000).toFixed(1)}s. Turning the output into a report…</div>`;
   try {
-    const explained = await postJson("/api/explain", { output: run.stdout });
+    const explained = await postJson("/api/explain", { output: run.stdout, code });
     renderReport(explained.markdown, run, explained);
   } catch (error) {
     resultBody.innerHTML = `<div class="run-error"><h3>Script ran, report failed</h3><p>${escapeHtml(error.message)}</p><details class="report-raw" open><summary>Raw output</summary><pre>${escapeHtml(run.stdout)}</pre></details></div>`;

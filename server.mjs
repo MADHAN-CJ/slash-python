@@ -1,7 +1,7 @@
 import { createReadStream, existsSync, statSync } from "node:fs";
 import { mkdtemp, writeFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, join, normalize, dirname } from "node:path";
+import { extname, join, normalize, dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createServer } from "node:http";
 import { spawn } from "node:child_process";
@@ -14,8 +14,17 @@ if (existsSync(join(root, ".env"))) {
 }
 const port = Number(process.env.PORT || 5180);
 const host = process.env.HOST || "127.0.0.1";
-const pythonBin = process.env.PYTHON_BIN || "python3";
+const pythonBin = (process.env.PYTHON_BIN || "python3").includes("/") ? resolve(root, process.env.PYTHON_BIN) : (process.env.PYTHON_BIN || "python3");
 const runTimeoutMs = Number(process.env.RUN_TIMEOUT_MS || 10_000);
+// Optional: the /markets Dhan MCP on the same host. When both are set, every run gets a short-lived
+// gateway token so `import slashdhan` works in scripts (read-only Dhan data through the gateway).
+const dhanMcpUrl = (process.env.SLASH_DHAN_MCP_URL || "").replace(/\/+$/, "");
+const dhanAdminSecret = process.env.SLASH_DHAN_MCP_ADMIN_SECRET || "";
+const dhanEnabled = Boolean(dhanMcpUrl && dhanAdminSecret);
+// Without the admin secret the script is sent to that MCP's own `run_python` tool instead (its
+// sandbox, its feed, no credentials needed): a remote runner rather than a local one.
+const dhanRemote = Boolean(dhanMcpUrl && !dhanAdminSecret);
+const dhanCacheDir = process.env.SLASHDHAN_CACHE_DIR || join(tmpdir(), "slash-python-slashdhan-cache");
 const outputCap = Number(process.env.RUN_OUTPUT_CAP || 64_000);
 const codeCap = 40_000;
 const model = process.env.CLAUDE_MODEL || "claude-opus-5-5";
@@ -47,17 +56,87 @@ async function readJson(request) {
   return JSON.parse(Buffer.concat(chunks).toString("utf8") || "{}");
 }
 
+async function dhanAdmin(method, body) {
+  const response = await fetch(`${dhanMcpUrl}/admin/run-token`, {
+    method,
+    headers: { Authorization: `Bearer ${dhanAdminSecret}`, "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(5_000),
+  });
+  if (!response.ok) throw new Error(`${method} /admin/run-token -> ${response.status} ${(await response.text()).slice(0, 200)}`);
+  return response.json();
+}
+
+// One gateway run token per script, revoked when the script ends. The gateway itself enforces the
+// read-only allowlist, the rate limits and the per-token call budget; the Dhan token never comes here.
+async function mintDhanRun() {
+  const issued = await dhanAdmin("POST", { ttl_seconds: Math.ceil(runTimeoutMs / 1000) + 30 });
+  return {
+    env: {
+      SLASHDHAN_GATEWAY_URL: issued.gatewayUrl,
+      SLASHDHAN_RUN_TOKEN: issued.token,
+      SLASHDHAN_SCRIP_MASTER_URL: issued.scripMasterUrl,
+      SLASHDHAN_CALL_BUDGET: String(issued.callBudget),
+      SLASHDHAN_CACHE_DIR: dhanCacheDir,
+    },
+    revoke: (() => { let done = false; return () => { if (done) return; done = true; dhanAdmin("DELETE", { token: issued.token }).catch(() => {}); }; })(),
+  };
+}
+
+// Runs the script in the /markets Dhan MCP's sandbox through its run_python tool (MCP over
+// Streamable HTTP, stateless JSON responses). The tool's text is "exit_code=N duration=Nms[ TRUNCATED]
+// / --- stdout --- / ... / --- stderr --- / ...", which is split back into the runner's result shape.
+async function runPythonRemote(code) {
+  const started = Date.now();
+  const timeoutS = Math.min(180, Math.max(1, Math.ceil(runTimeoutMs / 1000)));
+  const fail = (stderr) => ({ exitCode: 1, stdout: "", stderr, timedOut: false, truncated: false, durationMs: Date.now() - started, timeoutMs: runTimeoutMs });
+  let text;
+  try {
+    const response = await fetch(`${dhanMcpUrl}/`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
+      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "run_python", arguments: { code, timeout_seconds: timeoutS } } }),
+      signal: AbortSignal.timeout(runTimeoutMs + 15_000),
+    });
+    if (!response.ok) return fail(`The /markets Dhan sandbox answered ${response.status}. Try again in a few minutes.`);
+    const body = await response.json();
+    if (body.error) return fail(`The /markets Dhan sandbox refused the run: ${body.error.message || JSON.stringify(body.error)}`);
+    text = (body.result?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+  } catch (error) {
+    return fail(`The /markets Dhan sandbox is not reachable right now (${error.message}). Try again in a few minutes.`);
+  }
+  text = text.replace(/^Error executing tool run_python: /, "").replace(/File "[^"\n]*run_[0-9_]+_[0-9a-f]+\.py"/g, 'File "script.py"');
+  const head = text.match(/^exit_code=(-?\d+) duration=(\d+)ms( TRUNCATED)?\n/);
+  if (!head) return fail(text || "The /markets Dhan sandbox returned no output.");
+  const rest = text.slice(head[0].length);
+  const split = rest.indexOf("\n--- stderr ---\n");
+  const stdout = (split === -1 ? rest : rest.slice(0, split)).replace(/^--- stdout ---\n/, "").replace(/^\(empty\)$/, "");
+  const stderr = split === -1 ? "" : rest.slice(split + "\n--- stderr ---\n".length);
+  const exitCode = Number(head[1]);
+  return { exitCode, stdout, stderr, timedOut: exitCode === -9, truncated: Boolean(head[3]), durationMs: Number(head[2]), timeoutMs: timeoutS * 1000 };
+}
+
 // Runs the script in a fresh temp directory with a scrubbed environment and a wall-clock limit.
 // This is isolation for a trusted local workbench, not a sandbox for strangers' code.
 async function runPython(code) {
+  if (dhanRemote) return runPythonRemote(code);
   const dir = await mkdtemp(join(tmpdir(), "slash-python-"));
   const file = join(dir, "script.py");
   await writeFile(file, code, "utf8");
   const started = Date.now();
+  let dhan = null;
+  if (dhanEnabled) {
+    try {
+      dhan = await mintDhanRun();
+    } catch (error) {
+      await rm(dir, { recursive: true, force: true }).catch(() => {});
+      return { exitCode: 1, stdout: "", stderr: `The /markets Dhan feed is not reachable right now (${error.message}). Try again in a few minutes.`, timedOut: false, truncated: false, durationMs: Date.now() - started, timeoutMs: runTimeoutMs };
+    }
+  }
   return new Promise((resolve) => {
     const child = spawn(pythonBin, ["-I", "-B", "-u", "script.py"], {
       cwd: dir,
-      env: { PATH: process.env.PATH, LANG: "C.UTF-8", PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1" },
+      env: { PATH: process.env.PATH, LANG: "C.UTF-8", PYTHONIOENCODING: "utf-8", PYTHONDONTWRITEBYTECODE: "1", HOME: dir, ...(dhan ? dhan.env : {}) },
       stdio: ["ignore", "pipe", "pipe"],
     });
     let stdout = "";
@@ -73,11 +152,13 @@ async function runPython(code) {
     const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, runTimeoutMs);
     child.on("error", (error) => {
       clearTimeout(timer);
+      dhan?.revoke();
       rm(dir, { recursive: true, force: true }).catch(() => {});
       resolve({ exitCode: 1, stdout, stderr: `Could not start ${pythonBin}: ${error.message}`, timedOut: false, truncated, durationMs: Date.now() - started, timeoutMs: runTimeoutMs });
     });
     child.on("close", (exitCode, signal) => {
       clearTimeout(timer);
+      dhan?.revoke();
       rm(dir, { recursive: true, force: true }).catch(() => {});
       const clean = (text) => text.replace(/File "[^"\n]*script\.py"/g, 'File "script.py"');
       resolve({
@@ -109,6 +190,7 @@ const SYSTEM_PROMPT = `You write short Markdown reports for /markets, a research
 
 Rules:
 - Use only facts and numbers that appear in the output. Never invent, extrapolate or "correct" figures. If the output is thin, say so briefly and report what is there.
+- When the script is included, use it only to understand what the printed fields mean (definitions, units, windows, thresholds, method) and to explain the method in a sentence where it helps the reader. Never compute, re-derive or fill in numbers from the code; if a figure is not printed, it is not in the report. Do not quote or describe the code itself.
 - Lead with a one-paragraph summary of what the output shows, then structured sections. Use a Markdown table when the output is tabular. Keep it under about 300 words.
 - Indian market conventions: rupees as ₹ with Indian digit grouping when the output uses them; NSE/BSE, Nifty, Sensex, F&O terms as printed. Do not convert units or currencies.
 - Plain, concrete language. No hype, no emoji, no investment advice, no buy/sell/hold recommendations, no predictions. You may note what a reader might look at next.
@@ -126,9 +208,12 @@ async function handleExplain(request, response) {
     return sendJson(response, 503, { error: "The report writer is not configured. Start the server with ANTHROPIC_API_KEY set." });
   }
   try {
-    const { output } = await readJson(request);
+    const { output, code } = await readJson(request);
     if (typeof output !== "string" || !output.trim()) return sendJson(response, 400, { error: "There is no script output to write about." });
     const text = output.slice(0, outputCap);
+    // The script travels with the output as context for what the printed fields mean; the prompt
+    // forbids taking any number from it.
+    const script = typeof code === "string" && code.trim() ? `\n\nThe script that printed it (context only, never a source of numbers):\n\n\`\`\`python\n${code.slice(0, codeCap)}\n\`\`\`` : "";
 
     const stream = anthropic().beta.messages.stream({
       model,
@@ -137,7 +222,7 @@ async function handleExplain(request, response) {
       fallbacks: "default",
       output_config: { effort: "medium" },
       system: SYSTEM_PROMPT,
-      messages: [{ role: "user", content: `Script output:\n\n${text}` }],
+      messages: [{ role: "user", content: `Script output:\n\n${text}${script}` }],
     });
     const message = await stream.finalMessage();
 
@@ -178,5 +263,5 @@ const server = createServer((request, response) => {
 });
 
 server.listen(port, host, () => {
-  console.log(`/markets Python workbench at http://${host}:${port}  (python: ${pythonBin}, model: ${model}, report writer: ${process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN ? "on" : "OFF - set ANTHROPIC_API_KEY"})`);
+  console.log(`/markets Python workbench at http://${host}:${port}  (python: ${pythonBin}, model: ${model}, report writer: ${process.env.ANTHROPIC_API_KEY || process.env.ANTHROPIC_AUTH_TOKEN ? "on" : "OFF - set ANTHROPIC_API_KEY"}, slashdhan: ${dhanEnabled ? `local python + gateway ${dhanMcpUrl}` : dhanRemote ? `scripts run remotely in ${dhanMcpUrl}` : "OFF - set SLASH_DHAN_MCP_URL"})`);
 });
