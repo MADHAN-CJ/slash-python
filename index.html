@@ -6,7 +6,7 @@
   <title>/markets · Run Python on the market</title>
   <meta name="description" content="Write a Python script, run it on the /markets server, and read what it printed as a clear Markdown report.">
   <link rel="icon" href="assets/icons/markets-logomark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=1">
+  <link rel="stylesheet" href="styles.css?v=2">
 </head>
 <body id="top">
   <header class="floating-nav">
@@ -26,21 +26,45 @@
       <h2 class="visually-hidden" id="workbench-title">Python workbench</h2>
 
       <div class="editor-column">
-        <div class="editor-card" data-ui>
-          <div class="editor-chrome">
-            <img class="backend-logo" src="assets/icons/markets-logomark-mono.svg" width="32" height="16" alt="" aria-hidden="true">
-            <span class="editor-file">script.py</span>
-            <span class="editor-runtime">Python 3</span>
-          </div>
-          <div class="editor-host" id="editor" aria-label="Python script editor"></div>
+        <div class="mode-row">
+          <label class="mode-label" for="mode">Ask with</label>
+          <span class="mode-select-wrap">
+            <select class="mode-select" id="mode" aria-label="Choose how to ask">
+              <option value="nl">Natural language</option>
+              <option value="py">Python script</option>
+            </select>
+            <svg class="mode-chevron" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6l6 -6"/></svg>
+          </span>
         </div>
+
+        <div class="stage">
+          <div class="ask-card" id="ask-card" data-ui>
+            <div class="editor-chrome">
+              <img class="backend-logo" src="assets/icons/markets-logomark-mono.svg" width="32" height="16" alt="" aria-hidden="true">
+              <span class="editor-file">Your question</span>
+              <span class="editor-runtime">Indian markets</span>
+            </div>
+            <textarea class="ask-input" id="ask-input" rows="4" placeholder="Is RELIANCE above its 50-day average, and where is the Nifty trading right now?" aria-label="Market question" spellcheck="true"></textarea>
+          </div>
+
+          <div class="editor-card" id="editor-card" data-ui hidden>
+            <div class="editor-chrome">
+              <img class="backend-logo" src="assets/icons/markets-logomark-mono.svg" width="32" height="16" alt="" aria-hidden="true">
+              <span class="editor-file">script.py</span>
+              <span class="editor-runtime">Python 3 · slashdhan</span>
+            </div>
+            <div class="editor-host" id="editor" aria-label="Python script editor"></div>
+          </div>
+        </div>
+
         <div class="editor-actions">
           <button class="button button-primary" type="button" id="generate">
-            <span class="button-label">Generate report</span>
+            <span class="button-label">Write script and generate report</span>
             <svg class="icon" xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M17 7l-10 10"/><path d="M8 7l9 0l0 9"/></svg>
           </button>
-          <button class="button button-secondary" type="button" id="reset">Restore sample</button>
-          <p class="editor-hint">Runs <code>script.py</code> on the <span class="markets-wordmark"><span class="markets-slash">/</span>markets</span> server, then writes the report from what it printed. Shortcut: <kbd>⌘</kbd> <kbd>Enter</kbd>.</p>
+          <button class="button button-secondary" type="button" id="reset" hidden>Restore sample</button>
+          <p class="editor-hint" id="hint-nl"><span class="markets-wordmark"><span class="markets-slash">/</span>markets</span> writes a Python script for your question, runs it, and if it fails sends the error back for a rewrite, up to three scripts. The script opens in the editor so you can see and change it. Shortcut: <kbd>⌘</kbd> <kbd>Enter</kbd>.</p>
+          <p class="editor-hint" id="hint-py" hidden>Runs <code>script.py</code> on the <span class="markets-wordmark"><span class="markets-slash">/</span>markets</span> server with <code>slashdhan</code> and the shared Dhan feed, then writes the report from what it printed. Scripts you write or edit run once, with no auto-fix. Shortcut: <kbd>⌘</kbd> <kbd>Enter</kbd>.</p>
         </div>
       </div>
 
@@ -84,6 +108,6 @@
     <div class="footer-art" aria-hidden="true"><img src="assets/images/footer-horizon-v1.webp" width="1536" height="512" loading="lazy" decoding="async" alt=""></div>
   </footer>
 
-  <script src="dist/app.js?v=1" defer></script>
+  <script src="dist/app.js?v=2" defer></script>
 </body>
 </html>

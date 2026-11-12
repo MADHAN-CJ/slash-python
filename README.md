@@ -1,6 +1,11 @@
 # /markets Python workbench
 
-A one-page sibling of the /markets site: a headline, a one-line quote about the Indian market, an IDE-style Python editor, and one button. The button runs the script on the server; a failure shows the Python traceback, a success sends what the script printed to Claude, which writes a short Markdown report shown on the page.
+A one-page sibling of the /markets site: a headline, a one-line quote about the Indian market, and a workbench with two modes.
+
+- **Natural language** (default): type a market question. Claude writes a `slashdhan` script for it using the same guide the /markets Dhan MCP gives Claude in chat, the script opens in the editor, runs, and the printed output becomes a Markdown report. If the script fails, the traceback goes back to Claude for a rewrite, up to **three scripts per question**. Editing a generated script turns auto-fix off.
+- **Python script**: write or edit a script yourself and run it once. No auto-fix, ever.
+
+Scripts run through the /markets Dhan MCP (`run_python`), so `import slashdhan` works and the shared feed, rate limits and 60 s limit apply. Standard library only there (no numpy/pandas).
 
 Theme, fonts, icons and components come from `slash-dashboard/` (see its `BRAND_GUIDELINES.md`). No new fonts, no remote imports.
 
@@ -15,7 +20,10 @@ The server reads a `.env` file beside `server.mjs` on start (copy `.env.example`
 
 | Variable | Default | Meaning |
 |---|---|---|
-| `ANTHROPIC_API_KEY` | – | Needed for reports. Without it, scripts still run and the page explains that the report writer is off. |
+| `ANTHROPIC_API_KEY` | – | Needed for reports and for natural-language mode. Without it, scripts still run and the page explains that the writers are off. |
+| `SLASH_DHAN_MCP_URL` | – | The /markets Dhan MCP to run scripts through (e.g. `https://dhan-mcp-test1.slash.markets`). Unset = local `python3`, no market data, natural-language mode still works but scripts can't import slashdhan. |
+| `MCP_RUN_TIMEOUT_SECONDS` | `60` | Per-script limit passed to `run_python`. |
+| `COMPOSE_FAULT_FIRST` | – | Dev only: `1` appends a `raise` to the first generated script so the auto-fix loop can be watched. |
 | `CLAUDE_MODEL` | `claude-opus-5-5` | Report model. |
 | `PYTHON_BIN` | `python3` | Interpreter used for scripts. |
 | `RUN_TIMEOUT_MS` | `10000` | Wall-clock limit per script. |
@@ -28,9 +36,11 @@ The server reads a `.env` file beside `server.mjs` on start (copy `.env.example`
 ## How it works
 
 - `index.html`, `styles.css`: the page. Brand tokens are CSS custom properties at the top of the stylesheet.
-- `src/app.js` → `dist/app.js` (esbuild): CodeMirror 6 editor with Python mode, a light theme in the brand's terminal face (yellow selection), the run → report flow, Markdown rendering with `marked` + `DOMPurify`. The script is kept in `localStorage`.
-- `server.mjs`: static files plus two endpoints.
-  - `POST /api/run` `{code}` → writes `script.py` into a fresh temp directory and runs `python3 -I -B -u script.py` with a scrubbed environment, a timeout and an output cap. Returns `{exitCode, stdout, stderr, timedOut, durationMs}`.
+- `src/app.js` → `dist/app.js` (esbuild): mode dropdown, question box, the compose → run → fix loop (browser-driven so each script is visible), CodeMirror 6 editor with Python mode, a light theme in the brand's terminal face (yellow selection), the run → report flow, Markdown rendering with `marked` + `DOMPurify`. The script is kept in `localStorage`.
+- `server.mjs`: static files plus four endpoints.
+  - `GET /api/config` → which runner is active and whether natural-language mode is on.
+  - `POST /api/compose` `{query, attempt, previous?}` → Claude writes one script from the question, with the MCP's `SKILL.md` (fetched from the MCP at boot, or read from `../slash-dhan-mcp/SKILL.md`) as a prompt-cached system prompt. For attempts 2 and 3 the previous script, traceback and partial output are included. `attempt` is capped at 3 server-side.
+  - `POST /api/run` `{code}` → with `SLASH_DHAN_MCP_URL`, calls the MCP's `run_python` as an MCP client and parses its `exit_code=… --- stdout --- … --- stderr ---` text; otherwise writes `script.py` into a fresh temp directory and runs `python3 -I -B -u script.py` with a scrubbed environment, a timeout and an output cap. Returns `{exitCode, stdout, stderr, timedOut, durationMs}`.
   - `POST /api/explain` `{output}` → Claude (Anthropic SDK, streaming, server-side refusal fallback on) with a system prompt that forbids inventing numbers and advice. Returns `{markdown, model}`. Claude gets the printed output and, as context for what the printed fields mean, the script itself (`code`, optional); the system prompt forbids taking any number from the code.
 
 ## Dhan data in scripts (`import slashdhan`)

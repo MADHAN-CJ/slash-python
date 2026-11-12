@@ -1,5 +1,5 @@
 import { EditorView, basicSetup } from "codemirror";
-import { EditorState, Compartment } from "@codemirror/state";
+import { EditorState } from "@codemirror/state";
 import { keymap } from "@codemirror/view";
 import { indentWithTab } from "@codemirror/commands";
 import { python } from "@codemirror/lang-python";
@@ -8,44 +8,30 @@ import { tags } from "@lezer/highlight";
 import { marked } from "marked";
 import DOMPurify from "dompurify";
 
-const SAMPLE = `# Sample: how did a Nifty-style index behave over one year?
-# Illustrative monthly closes, not live data. Replace with your own numbers.
+const SAMPLE = `# Sample: is TCS trending up? Runs on the /markets server with the shared Dhan feed.
+import slashdhan as z
 
-closes = {
-    "Jan": 21_725, "Feb": 21_983, "Mar": 22_327, "Apr": 22_605,
-    "May": 22_531, "Jun": 24_011, "Jul": 24_951, "Aug": 25_236,
-    "Sep": 25_811, "Oct": 24_205, "Nov": 23_559, "Dec": 23_645,
-}
+try:
+    d = z.daily_candles("TCS", days_back=320)
+except Exception as e:  # TokenExpired, DataPlanMissing, RateLimited...
+    print(f"Could not load candles: {type(e).__name__}: {e}")
+    raise SystemExit
 
-months = list(closes)
-values = list(closes.values())
+c = z.closes(d)
+e50, e200, r = z.ema(c, 50)[-1], z.ema(c, 200)[-1], z.rsi(c)[-1]
+m = z.macd(c)["histogram"][-1]
+hi = max(x["high"] for x in d[-30:])
+lo = min(x["low"] for x in d[-30:])
+trend = "above" if c[-1] > e50 > e200 else "below" if c[-1] < e50 < e200 else "mixed vs"
 
-total_return = (values[-1] / values[0] - 1) * 100
-
-peak, max_drawdown, trough_month = values[0], 0.0, months[0]
-for month, value in zip(months, values):
-    peak = max(peak, value)
-    drawdown = (value / peak - 1) * 100
-    if drawdown < max_drawdown:
-        max_drawdown, trough_month = drawdown, month
-
-monthly = [(months[i], (values[i] / values[i - 1] - 1) * 100) for i in range(1, len(values))]
-best = max(monthly, key=lambda m: m[1])
-worst = min(monthly, key=lambda m: m[1])
-up_months = sum(1 for _, r in monthly if r > 0)
-
-print("Index: Nifty-style sample, monthly closes, one calendar year")
-print(f"Start {values[0]:,}  End {values[-1]:,}  Total return {total_return:+.1f}%")
-print(f"Max drawdown {max_drawdown:.1f}% (trough in {trough_month})")
-print(f"Best month {best[0]} {best[1]:+.1f}%   Worst month {worst[0]} {worst[1]:+.1f}%")
-print(f"Up months {up_months} of {len(monthly)}")
-print()
-print("Month  Close    Change")
-for month, r in monthly:
-    print(f"{month:<6} {closes[month]:>7,} {r:+6.1f}%")
+print(f"TCS (NSE) last close {c[-1]:,.1f} on {d[-1]['time'][:10]}")
+print(f"Trend: {trend} EMA50 {e50:,.0f} / EMA200 {e200:,.0f}")
+print(f"RSI14 {r:.0f}, MACD histogram {m:+.1f}")
+print(f"30-day range {lo:,.0f} to {hi:,.0f} ({(c[-1] - lo) / (hi - lo) * 100:.0f}% of range)")
 `;
 
 const STORAGE_KEY = "slash-python.script";
+let MAX_ATTEMPTS = 3;
 
 // Editor theme in the brand's light terminal face. Yellow is the selection colour, as on the homepage.
 const theme = EditorView.theme({
@@ -84,14 +70,23 @@ const highlight = HighlightStyle.define([
 ]);
 
 const $ = (id) => document.getElementById(id);
+const modeSelect = $("mode");
+const askCard = $("ask-card");
+const askInput = $("ask-input");
+const editorCard = $("editor-card");
 const generateButton = $("generate");
 const resetButton = $("reset");
 const resultCard = $("result");
 const resultStatus = $("result-status");
 const resultBody = $("result-body");
 const buttonLabel = generateButton.querySelector(".button-label");
+const hintNl = $("hint-nl");
+const hintPy = $("hint-py");
 
 let busy = false;
+// The script currently in the editor came from a question (auto-fix applies) or from the user (it never does).
+let generated = null; // { query, attempt }
+let settingDoc = false;
 
 function savedScript() {
   try { return localStorage.getItem(STORAGE_KEY) || SAMPLE; } catch { return SAMPLE; }
@@ -115,50 +110,81 @@ const editor = new EditorView({
       theme,
       syntaxHighlighting(highlight),
       EditorView.lineWrapping,
-      EditorView.updateListener.of((update) => { if (update.docChanged) persist(update.state.doc.toString()); }),
+      EditorView.updateListener.of((update) => {
+        if (!update.docChanged) return;
+        persist(update.state.doc.toString());
+        if (!settingDoc && generated) markManual();
+      }),
     ],
   }),
   parent: $("editor"),
 });
 
+function setDoc(text) {
+  settingDoc = true;
+  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: text } });
+  settingDoc = false;
+}
+
+function markManual() { generated = null; }
+
+// ----- mode -----
+function setMode(mode, { silent = false } = {}) {
+  modeSelect.value = mode;
+  const nl = mode === "nl";
+  askCard.hidden = !nl;
+  editorCard.hidden = nl;
+  hintNl.hidden = !nl;
+  hintPy.hidden = nl;
+  resetButton.hidden = nl;
+  buttonLabel.textContent = nl ? "Write script and generate report" : "Generate report";
+  if (!silent) (nl ? askInput : editor).focus();
+}
+modeSelect.addEventListener("change", () => setMode(modeSelect.value));
+
+// ----- result card -----
 function setState(state, status) {
   resultCard.dataset.state = state;
   resultStatus.textContent = status;
-  if (state === "running") resultCard.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  if (state === "running" || state === "writing") {
+    resultCard.scrollIntoView({ behavior: matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth", block: "start" });
+  }
 }
 
 function setBusy(value, label) {
   busy = value;
   generateButton.disabled = value;
   resetButton.disabled = value;
-  buttonLabel.textContent = label || "Generate report";
+  modeSelect.disabled = value;
+  if (label) buttonLabel.textContent = label;
+  else setMode(modeSelect.value, { silent: true });
   generateButton.setAttribute("aria-busy", value ? "true" : "false");
 }
 
 function escapeHtml(text) {
-  return text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  return String(text).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
 function errorLine(stderr) {
-  const matches = [...stderr.matchAll(/File "script\.py", line (\d+)/g)];
+  const matches = [...stderr.matchAll(/File "(?:script\.py|<string>|[^"]*\.py)", line (\d+)/g)];
   return matches.length ? Number(matches[matches.length - 1][1]) : null;
 }
 
 function lastErrorMessage(stderr) {
   const lines = stderr.trim().split("\n").filter(Boolean);
   for (let i = lines.length - 1; i >= 0; i -= 1) {
-    if (/^\w+(Error|Exception|Warning|Exit|Interrupt)\b/.test(lines[i].trim())) return lines[i].trim();
+    if (/^\w+(Error|Exception|Warning|Exit|Interrupt|Expired|Missing|NotFound|Limited|Exceeded)\b/.test(lines[i].trim())) return lines[i].trim();
   }
   return lines[lines.length - 1] || "The script stopped.";
 }
 
-function renderRunError(run) {
+function renderRunError(run, { attemptsNote = "" } = {}) {
   const stderr = run.stderr || "";
   const line = errorLine(stderr);
   const message = run.timedOut
     ? `The script ran past the ${Math.round(run.timeoutMs / 1000)} second limit and was stopped.`
     : lastErrorMessage(stderr);
-  const title = run.timedOut ? "Python ran out of time" : (line ? `Python stopped at line ${line}` : "Python stopped");
+  const title = run.timedOut ? "Python ran out of time" : run.feedDown ? "The market feed is unavailable" : (line ? `Python stopped at line ${line}` : "Python stopped");
   const tracebackHtml = stderr
     ? `<pre tabindex="0">${stderr.trim().split("\n").map((l) => {
         const hit = line && new RegExp(`line ${line}\\b`).test(l);
@@ -166,19 +192,21 @@ function renderRunError(run) {
       }).join("\n")}</pre>`
     : "";
   const stdoutHtml = run.stdout ? `<details class="report-raw"><summary>Printed before it stopped</summary><pre>${escapeHtml(run.stdout)}</pre></details>` : "";
-  resultBody.innerHTML = `<div class="run-error"><h3>${escapeHtml(title)}</h3><p>Fix the script and generate again. The compiler said:</p>${tracebackHtml}<div class="error-summary"><strong>${escapeHtml(message)}</strong></div>${stdoutHtml}</div>`;
-  if (line) {
+  const note = attemptsNote ? `<p class="attempts-note">${escapeHtml(attemptsNote)}</p>` : "";
+  resultBody.innerHTML = `<div class="run-error"><h3>${escapeHtml(title)}</h3>${note}<p>${run.feedDown ? "Try again in a few minutes." : "Fix the script and generate again. The interpreter said:"}</p>${tracebackHtml}<div class="error-summary"><strong>${escapeHtml(message)}</strong></div>${stdoutHtml}</div>`;
+  if (line && !editorCard.hidden) {
     const pos = editor.state.doc.line(Math.min(line, editor.state.doc.lines)).from;
     editor.dispatch({ selection: { anchor: pos }, scrollIntoView: true });
   }
   setState("error", line ? `Error on line ${line}` : "Error");
 }
 
-function renderReport(markdown, run, meta) {
+function renderReport(markdown, run, meta, { question = "", attempts = 0 } = {}) {
   const html = DOMPurify.sanitize(marked.parse(markdown, { gfm: true, breaks: false }));
   const seconds = (run.durationMs / 1000).toFixed(1);
+  const origin = question ? `Answering: “${escapeHtml(question)}” with script ${attempts} of ${MAX_ATTEMPTS}. ` : "";
   resultBody.innerHTML = `<article class="report">${html}</article>
-    <p class="report-meta">Written from ${run.stdout.length.toLocaleString()} characters your script printed in ${seconds}s${meta?.model ? ` · ${escapeHtml(meta.model)}` : ""}. Reports can be wrong; check the numbers against the raw output.</p>
+    <p class="report-meta">${origin}Written from ${run.stdout.length.toLocaleString()} characters your script printed in ${seconds}s${meta?.model ? ` · ${escapeHtml(meta.model)}` : ""}. Reports can be wrong; check the numbers against the raw output.</p>
     <details class="report-raw"><summary>Raw output</summary><pre>${escapeHtml(run.stdout)}</pre></details>`;
   setState("done", "Report ready");
 }
@@ -188,6 +216,10 @@ function renderNote(text, state = "error", status = "Nothing to report") {
   setState(state, status);
 }
 
+function renderProgress(text) {
+  resultBody.innerHTML = `<div class="run-note">${escapeHtml(text)}</div>`;
+}
+
 async function postJson(url, body) {
   const response = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
   const payload = await response.json().catch(() => ({}));
@@ -195,48 +227,117 @@ async function postJson(url, body) {
   return payload;
 }
 
-async function generate() {
-  if (busy) return;
-  const code = editor.state.doc.toString();
-  if (!code.trim()) { renderNote("The editor is empty. Write a script that prints something, then generate.", "error", "Empty script"); return; }
-
+// ----- the flows -----
+// Runs the editor's script once, then writes the report. Returns the run so callers can decide what next.
+async function runAndReport(code, { question = "", attempts = 0, attemptLabel = "" } = {}) {
   setBusy(true, "Running script…");
-  setState("running", "Running script.py");
-  resultBody.innerHTML = `<div class="run-note">Running your script on the server…</div>`;
+  setState("running", attemptLabel ? `Running ${attemptLabel}` : "Running script.py");
+  renderProgress(attemptLabel ? `Running ${attemptLabel} on the /markets server…` : "Running your script on the /markets server…");
 
   let run;
   try {
     run = await postJson("/api/run", { code });
   } catch (error) {
-    renderNote(error.message, "error", "Could not run"); setBusy(false); return;
+    return { failed: true, run: { exitCode: 1, stderr: error.message, stdout: "", durationMs: 0, timeoutMs: 0 } };
   }
-
-  if (run.exitCode !== 0 || run.timedOut) { renderRunError(run); setBusy(false); return; }
+  if (run.exitCode !== 0 || run.timedOut) return { failed: true, run };
   if (!run.stdout.trim()) {
     renderNote("The script finished without printing anything, so there is nothing to write about. Add print() calls for the figures you want in the report.", "error", "No output");
-    setBusy(false); return;
+    return { failed: false, run, empty: true };
   }
 
   setBusy(true, "Writing report…");
   setState("writing", "Writing the report");
-  resultBody.innerHTML = `<div class="run-note">Script finished in ${(run.durationMs / 1000).toFixed(1)}s. Turning the output into a report…</div>`;
+  renderProgress(`Script finished in ${(run.durationMs / 1000).toFixed(1)}s. Turning the output into a report…`);
   try {
-    const explained = await postJson("/api/explain", { output: run.stdout, code });
-    renderReport(explained.markdown, run, explained);
+    const explained = await postJson("/api/explain", { output: run.stdout });
+    renderReport(explained.markdown, run, explained, { question, attempts });
   } catch (error) {
     resultBody.innerHTML = `<div class="run-error"><h3>Script ran, report failed</h3><p>${escapeHtml(error.message)}</p><details class="report-raw" open><summary>Raw output</summary><pre>${escapeHtml(run.stdout)}</pre></details></div>`;
     setState("error", "Report failed");
   }
+  return { failed: false, run };
+}
+
+// Python mode: one run, no auto-fix, whoever wrote the script.
+async function pythonFlow() {
+  const code = editor.state.doc.toString();
+  if (!code.trim()) { renderNote("The editor is empty. Write a script that prints something, then generate.", "error", "Empty script"); return; }
+  const result = await runAndReport(code);
+  if (result.failed) renderRunError(result.run);
   setBusy(false);
+}
+
+// Natural-language mode: compose -> run -> (compose again with the error, up to MAX_ATTEMPTS scripts) -> report.
+async function questionFlow() {
+  const query = askInput.value.trim();
+  if (!query) { renderNote("Type a market question first, for example “Is RELIANCE above its 50-day average?”", "error", "No question"); askInput.focus(); return; }
+
+  let previous = null;
+  let code = "";
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+    setBusy(true, attempt === 1 ? "Writing script…" : "Fixing script…");
+    setState("writing", attempt === 1 ? "Writing a script from your question" : `Rewriting after the error, script ${attempt} of ${MAX_ATTEMPTS}`);
+    renderProgress(attempt === 1 ? "Reading your question and generating a script…" : `Script ${attempt - 1} failed. Sending the traceback back and writing script ${attempt} of ${MAX_ATTEMPTS}…`);
+    try {
+      const composed = await postJson("/api/compose", { query, attempt, previous });
+      code = composed.code;
+      MAX_ATTEMPTS = composed.maxAttempts || MAX_ATTEMPTS;
+    } catch (error) {
+      renderNote(`Could not write the script: ${error.message}`, "error", "Script writer failed");
+      setBusy(false);
+      return;
+    }
+
+    generated = { query, attempt };
+    setDoc(code);
+    setMode("py", { silent: true });
+
+    const result = await runAndReport(code, { question: query, attempts: attempt, attemptLabel: `script ${attempt} of ${MAX_ATTEMPTS}` });
+    if (!result.failed) { setBusy(false); return; }
+
+    // Stop retrying if the user edited the script meanwhile, the feed is down, or this was the last attempt.
+    const stillGenerated = generated && generated.attempt === attempt;
+    if (!stillGenerated || result.run.feedDown || attempt === MAX_ATTEMPTS) {
+      const note = !stillGenerated ? "" : result.run.feedDown ? "" : `All ${MAX_ATTEMPTS} scripts failed. The last one is in the editor; fix it by hand and generate again.`;
+      renderRunError(result.run, { attemptsNote: note });
+      setBusy(false);
+      return;
+    }
+    previous = { code, stderr: result.run.stderr, stdout: result.run.stdout };
+    renderRunError(result.run, { attemptsNote: `Script ${attempt} of ${MAX_ATTEMPTS} failed. Writing a fix…` });
+  }
+  setBusy(false);
+}
+
+async function generate() {
+  if (busy) return;
+  if (modeSelect.value === "nl") await questionFlow();
+  else await pythonFlow();
 }
 
 generateButton.addEventListener("click", generate);
 resetButton.addEventListener("click", () => {
-  editor.dispatch({ changes: { from: 0, to: editor.state.doc.length, insert: SAMPLE } });
+  markManual();
+  setDoc(SAMPLE);
   editor.focus();
 });
+askInput.addEventListener("keydown", (event) => {
+  if ((event.metaKey || event.ctrlKey) && event.key === "Enter") { event.preventDefault(); generate(); }
+});
 
-// Entrance: hero parts, then the two panels, staggered once.
-const risers = [".hero-title", ".hero-quote", ".hero-description", ".editor-column", ".result-column"].map((s) => document.querySelector(s)).filter(Boolean);
+// Server capabilities decide whether natural-language mode is offered at all.
+fetch("/api/config").then((r) => r.json()).then((config) => {
+  MAX_ATTEMPTS = config.maxAttempts || MAX_ATTEMPTS;
+  if (!config.naturalLanguage) {
+    modeSelect.querySelector('option[value="nl"]').disabled = true;
+    setMode("py", { silent: true });
+  }
+}).catch(() => {});
+
+setMode("nl", { silent: true });
+
+// Entrance: hero parts, then the panels, staggered once.
+const risers = [".hero-title", ".hero-quote", ".hero-description", ".mode-row", ".stage", ".result-column"].map((s) => document.querySelector(s)).filter(Boolean);
 risers.forEach((el, i) => { el.classList.add("rise"); el.style.setProperty("--rise-delay", `${i * 80}ms`); });
 requestAnimationFrame(() => requestAnimationFrame(() => risers.forEach((el) => el.classList.add("is-in"))));
