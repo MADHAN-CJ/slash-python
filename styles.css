@@ -41,11 +41,11 @@ button, input, select, textarea { font: inherit; }
 .markets-slash { display: inline-block; width: .424em; height: .8em; margin-right: .04em; vertical-align: -.12em; overflow: hidden; text-indent: 1em; background: currentColor; mask: url("assets/icons/markets-slash.svg") center / contain no-repeat; -webkit-mask: url("assets/icons/markets-slash.svg") center / contain no-repeat; }
 
 /* Floating navigation (brand component, reused as-is) */
-.floating-nav { position: fixed; z-index: 50; inset: 16px 0 auto; display: flex; align-items: center; gap: 28px; width: calc(100% - 48px); max-width: 1120px; min-height: 66px; margin-inline: auto; padding: 9px 10px 9px 22px; border: 1px solid #e0e5d9; border-radius: 999px; background: rgb(250 251 246 / .74); backdrop-filter: blur(8px) saturate(1.1); -webkit-backdrop-filter: blur(8px) saturate(1.1); box-shadow: 0 5px 24px #25301d0a; color: var(--ink); }
+.floating-nav { position: fixed; z-index: 50; inset: 16px 0 auto; display: flex; align-items: center; gap: 28px; width: calc(100% - 48px); max-width: 1120px; min-height: 66px; margin-inline: auto; padding: 9px 22px; border: 1px solid #e0e5d9; border-radius: 999px; background: rgb(250 251 246 / .74); backdrop-filter: blur(8px) saturate(1.1); -webkit-backdrop-filter: blur(8px) saturate(1.1); box-shadow: 0 5px 24px #25301d0a; color: var(--ink); }
 .nav-brand { display: inline-flex; align-items: center; gap: 10px; flex-shrink: 0; color: inherit; font-size: 20px; text-decoration: none; }
 .nav-brand img { object-fit: contain; }
 .nav-brand .markets-wordmark { font-weight: 600; }
-.nav-page { flex: 1; text-align: center; color: #000; font-size: 14px; font-weight: 500; white-space: nowrap; }
+.nav-page { flex: 1; text-align: right; color: var(--muted); font-size: 14px; font-weight: 500; white-space: nowrap; }
 .nav-connect { display: inline-flex; align-items: center; justify-content: center; gap: 10px; min-height: 46px; padding: 10px 20px; border-radius: 999px; background: #191d16; color: #fff; font-size: 16px; font-weight: 400; text-decoration: none; white-space: nowrap; transition: background 150ms ease; }
 .nav-connect img { filter: invert(1); }
 .nav-connect:hover { background: #35412b; }
@@ -184,10 +184,10 @@ button, input, select, textarea { font: inherit; }
 }
 
 @media (max-width: 900px) {
-  .floating-nav { inset-block-start: 12px; width: calc(100% - 32px); max-width: 600px; min-height: 60px; gap: 10px; padding: 7px 8px 7px 16px; }
+  .floating-nav { inset-block-start: 12px; width: calc(100% - 32px); max-width: 600px; min-height: 60px; gap: 10px; padding: 7px 16px; }
   .nav-brand { gap: 7px; margin-right: auto; font-size: 18px; }
   .nav-brand img { width: 30px; height: 24px; }
-  .nav-page { display: none; }
+  .nav-page { display: block; font-size: 13px; }
   .nav-connect { min-height: 42px; gap: 7px; padding: 9px 14px; }
   .nav-connect img { display: none; }
 }
