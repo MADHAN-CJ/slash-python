@@ -2,9 +2,9 @@
 # Operate the workbench box over SSH. Settings come from deploy/deploy.env (git-ignored; see
 # deploy.env.example): DEPLOY_HOST, PUBLIC_HOSTNAME, APP_PORT. Files are rsync'd from this checkout.
 #
-#   bash deploy/remote.sh setup     one-time: sync, user, venv, unit, nginx + basic auth, cert
+#   bash deploy/remote.sh setup     one-time: sync, user, venv, unit, nginx, cert
 #   bash deploy/remote.sh deploy    sync + rebuild + restart
-#   bash deploy/remote.sh status | logs | creds | cert
+#   bash deploy/remote.sh status | logs | cert
 set -euo pipefail
 HERE=$(cd "$(dirname "$0")" && pwd)
 PROJECT=$(cd "$HERE/.." && pwd)
@@ -35,8 +35,6 @@ case "${1:-}" in
     ssh "$HOST" "systemctl status slash-python --no-pager | head -5; curl -fsS -o /dev/null -w 'local %{http_code}\n' http://127.0.0.1:$PORT/" ;;
   logs)
     ssh "$HOST" 'journalctl -u slash-python -n 100 --no-pager -o cat' ;;
-  creds)
-    ssh "$HOST" "cat $REMOTE_DIR/credentials.txt" ;;
   cert)
     ssh "$HOST" "certbot --nginx -d $HOSTNAME_PUBLIC --non-interactive --agree-tos --redirect --keep-until-expiring && systemctl reload nginx" ;;
   *)

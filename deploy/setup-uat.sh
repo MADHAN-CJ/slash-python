@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # One-time setup on the uat box (run as root): service user, app dir (synced by remote.sh),
-# Node 22 build, a uv-managed Python venv with numpy+pandas, systemd unit, .env, nginx site with
-# basic auth, certificate. Re-runnable.
+# Node 22 build, a uv-managed Python venv with numpy+pandas, systemd unit, .env, nginx site,
+# certificate. Re-runnable.
 set -euo pipefail
 APP=/opt/slash-python
 USER_NAME=slashpy
@@ -11,9 +11,7 @@ HOSTNAME_PUBLIC=${PUBLIC_HOSTNAME:?set PUBLIC_HOSTNAME (remote.sh passes it from
 PORT=${APP_PORT:-8021}
 SITE_NAME=${HOSTNAME_PUBLIC//./-}
 SITE=/etc/nginx/sites-available/$SITE_NAME
-HTPASSWD=/etc/nginx/htpasswd-$SITE_NAME
 HERE=$(cd "$(dirname "$0")" && pwd)
-CREDS=$HERE/credentials.txt
 NODE_BIN=$(ls -d /root/.nvm/versions/node/v22*/bin/node 2>/dev/null | sort -V | tail -1 || true)
 [ -n "$NODE_BIN" ] || { echo "No Node 22 under /root/.nvm; install one (nvm install 22)" >&2; exit 1; }
 NPM_BIN=$(dirname "$NODE_BIN")/npm
@@ -54,17 +52,8 @@ systemctl daemon-reload
 systemctl enable --now slash-python
 systemctl restart slash-python
 
-# Basic auth: one login, generated once and kept in $CREDS (root-only).
-if [ ! -f "$HTPASSWD" ]; then
-  PASS=$(openssl rand -base64 18 | tr -d '/+=' | cut -c1-20)
-  printf 'markets:%s\n' "$(openssl passwd -apr1 "$PASS")" > "$HTPASSWD"
-  chmod 640 "$HTPASSWD" && chown root:www-data "$HTPASSWD"
-  printf 'user: markets\npassword: %s\n' "$PASS" > "$CREDS" && chmod 600 "$CREDS"
-  echo "basic-auth login written to $CREDS"
-fi
-
 if [ ! -f "$SITE" ]; then
-  sed -e "s|__HOSTNAME__|$HOSTNAME_PUBLIC|g" -e "s|__PORT__|$PORT|g" -e "s|__SITE__|$SITE_NAME|g" "$HERE/nginx.conf.template" > "$SITE"
+  sed -e "s|__HOSTNAME__|$HOSTNAME_PUBLIC|g" -e "s|__PORT__|$PORT|g" "$HERE/nginx.conf.template" > "$SITE"
   chmod 644 "$SITE"
   ln -sf "$SITE" "/etc/nginx/sites-enabled/$SITE_NAME"
 fi
@@ -79,4 +68,4 @@ for attempt in {1..30}; do
   sleep 1
 done
 systemctl is-active slash-python
-echo "URL: https://$HOSTNAME_PUBLIC  (login in $CREDS)"
+echo "URL: https://$HOSTNAME_PUBLIC"
