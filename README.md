@@ -37,8 +37,8 @@ The server reads a `.env` file beside `server.mjs` on start (copy `.env.example`
 
 Two modes, picked by which variables are set.
 
-**Remote (URL only).** `POST /api/run` forwards the script to the MCP's `run_python` tool and maps its
-result back (`exit_code`, stdout, stderr, truncation, timeout). The script runs in the MCP's own sandbox
+**Remote (URL only).** `POST /api/run` forwards the script to the MCP's plain HTTP API (`POST /api/v1/run`,
+the same runner its `run_python` tool uses) and maps the JSON back (`exit_code`, stdout, stderr, truncation, timeout). The script runs in the MCP's own sandbox
 against its feed, so `import slashdhan` works with no credentials on this side; `PYTHON_BIN` is not
 used, and only the standard library is available there (no numpy/pandas). The MCP's workspace is shared
 by all of its users, so saved files need distinctive names. Timeout is `RUN_TIMEOUT_MS` capped at the

@@ -83,37 +83,37 @@ async function mintDhanRun() {
   };
 }
 
-// Runs the script in the /markets Dhan MCP's sandbox through its run_python tool (MCP over
-// Streamable HTTP, stateless JSON responses). The tool's text is "exit_code=N duration=Nms[ TRUNCATED]
-// / --- stdout --- / ... / --- stderr --- / ...", which is split back into the runner's result shape.
+// Runs the script in the /markets Dhan MCP's sandbox through its plain HTTP API (POST /api/v1/run,
+// the same runner and feed its run_python tool uses). Its JSON already has the runner's shape; only
+// the traceback path is rewritten to script.py so the editor can jump to the line.
 async function runPythonRemote(code) {
   const started = Date.now();
   const timeoutS = Math.min(180, Math.max(1, Math.ceil(runTimeoutMs / 1000)));
   const fail = (stderr) => ({ exitCode: 1, stdout: "", stderr, timedOut: false, truncated: false, durationMs: Date.now() - started, timeoutMs: runTimeoutMs });
-  let text;
+  let body;
   try {
-    const response = await fetch(`${dhanMcpUrl}/`, {
+    const response = await fetch(`${dhanMcpUrl}/api/v1/run`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
-      body: JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/call", params: { name: "run_python", arguments: { code, timeout_seconds: timeoutS } } }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code, timeout_seconds: timeoutS }),
       signal: AbortSignal.timeout(runTimeoutMs + 15_000),
     });
-    if (!response.ok) return fail(`The /markets Dhan sandbox answered ${response.status}. Try again in a few minutes.`);
-    const body = await response.json();
-    if (body.error) return fail(`The /markets Dhan sandbox refused the run: ${body.error.message || JSON.stringify(body.error)}`);
-    text = (body.result?.content || []).filter((c) => c.type === "text").map((c) => c.text).join("\n");
+    body = await response.json().catch(() => null);
+    if (response.status === 503 && body?.feed) return fail(body.message || `The /markets Dhan feed is ${body.feed}. Try again in a few minutes.`);
+    if (!response.ok || !body) return fail(`The /markets Dhan sandbox answered ${response.status}${body?.error ? `: ${body.error}` : ""}. Try again in a few minutes.`);
   } catch (error) {
     return fail(`The /markets Dhan sandbox is not reachable right now (${error.message}). Try again in a few minutes.`);
   }
-  text = text.replace(/^Error executing tool run_python: /, "").replace(/File "[^"\n]*run_[0-9_]+_[0-9a-f]+\.py"/g, 'File "script.py"');
-  const head = text.match(/^exit_code=(-?\d+) duration=(\d+)ms( TRUNCATED)?\n/);
-  if (!head) return fail(text || "The /markets Dhan sandbox returned no output.");
-  const rest = text.slice(head[0].length);
-  const split = rest.indexOf("\n--- stderr ---\n");
-  const stdout = (split === -1 ? rest : rest.slice(0, split)).replace(/^--- stdout ---\n/, "").replace(/^\(empty\)$/, "");
-  const stderr = split === -1 ? "" : rest.slice(split + "\n--- stderr ---\n".length);
-  const exitCode = Number(head[1]);
-  return { exitCode, stdout, stderr, timedOut: exitCode === -9, truncated: Boolean(head[3]), durationMs: Number(head[2]), timeoutMs: timeoutS * 1000 };
+  const clean = (text) => (text || "").replace(/File "[^"\n]*run_[0-9_]+_[0-9a-f]+\.py"/g, 'File "script.py"');
+  return {
+    exitCode: Number(body.exit_code ?? 1),
+    stdout: body.stdout || "",
+    stderr: clean(body.stderr),
+    timedOut: Boolean(body.timed_out),
+    truncated: Boolean(body.truncated),
+    durationMs: Number(body.duration_ms ?? Date.now() - started),
+    timeoutMs: timeoutS * 1000,
+  };
 }
 
 // Runs the script in a fresh temp directory with a scrubbed environment and a wall-clock limit.
