@@ -1,0 +1,34 @@
+[Unit]
+Description=slash-python (/markets Python workbench)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=slashpy
+Group=slashpy
+WorkingDirectory=/opt/slash-python
+EnvironmentFile=/opt/slash-python/.env
+Environment=HOME=/var/lib/slashpy
+ExecStart=__NODE_BIN__ /opt/slash-python/server.mjs
+Restart=always
+RestartSec=3
+
+# User scripts run under this same unit, so the confinement below applies to them too.
+NoNewPrivileges=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+InaccessiblePaths=-/var/www -/etc/nginx -/etc/letsencrypt -/opt/slash-dhan-mcp -/opt/zap-claude-mcp -/opt/zap-eve-mcp -/opt/zap-kite-mcp -/root
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+LockPersonality=true
+MemoryMax=1G
+CPUQuota=200%
+TasksMax=256
+LimitNOFILE=4096
+
+[Install]
+WantedBy=multi-user.target

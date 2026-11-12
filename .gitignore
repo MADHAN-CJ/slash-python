@@ -1,2 +1,7 @@
 node_modules/
+dist/
 .env
+.venv/
+deploy/deploy.env
+deploy/nginx.conf
+deploy/credentials*
